@@ -5,5 +5,5 @@ using namespace intersections::util;
 
 TEST_CASE("Default construction")
 {
-    probing_weak_unordered_set<int> set;
+    rh_weak_unordered_set<int> set;
 }
