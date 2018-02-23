@@ -5,7 +5,7 @@
 using namespace std;
 using namespace intersections;
 
-TEST_CASE("stringify(int_ty)")
+TEST_CASE("object-based types")
 {
     CHECK(stringify(type::make<int_ty>()) == "Int");
     CHECK(stringify(type::make<function_ty>(vector{type::make<int_ty>()},
@@ -16,3 +16,4 @@ TEST_CASE("stringify(int_ty)")
                                             type::make<double_ty>()))
           == "(Int, Real) -> Double");
 }
+
