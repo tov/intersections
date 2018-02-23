@@ -4,7 +4,7 @@
 
 #include <memory>
 
-namespace weak {
+namespace intersections::util {
 
 static size_t const default_bucket_count = 8;
 
@@ -38,33 +38,19 @@ public:
         const key_equal& equal = key_equal(),
         const allocator_type& allocator = allocator_type(),
         const bucket_allocator_type& bucket_allocator = bucket_allocator_type())
-            : capacity_(capacity)
-            , hash_(hash)
+            : hash_(hash)
             , equal_(equal)
             , allocator_(allocator)
             , bucket_allocator_(bucket_allocator)
-            , buckets_(allocate_(bucket_allocator_, capacity_))
+            , buckets_(capacity, bucket_allocator_)
     { }
 
 private:
-    size_t capacity_ = 0;
     hasher hash_;
     key_equal equal_;
     allocator_type allocator_;
     bucket_allocator_type bucket_allocator_;
-    bucket_t* buckets_;
-
-    static bucket_t*
-    allocate_(bucket_allocator_type& allocator, size_t capacity)
-    {
-        using traits = std::allocator_traits<bucket_allocator_type>;
-        auto new_buckets = traits::allocate(allocator, capacity);
-
-        for (size_t i = 0; i < capacity; ++i)
-            new(&new_buckets[i].first) weak_ptr_type;
-
-        return new_buckets;
-    }
+    fixed_vector<bucket_t, bucket_allocator_type> buckets_;
 };
 
-} // end namespace weak
+} // end namespace intersections::util

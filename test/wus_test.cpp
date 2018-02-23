@@ -1,7 +1,7 @@
 #include "util/weak_unordered_set.h"
 #include <catch.hpp>
 
-using namespace weak;
+using namespace intersections::util;
 
 TEST_CASE("Default construction")
 {
