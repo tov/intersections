@@ -43,6 +43,8 @@ struct real_ty : type_impl_base {
 };
 
 struct function_ty : type_impl_base {
+    function_ty(std::vector<type>, type);
+
     std::vector<type> arguments;
     type result;
 

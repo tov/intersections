@@ -24,6 +24,10 @@ void real_ty::format(std::ostream& o) const
     o << "Real";
 }
 
+function_ty::function_ty(std::vector<type> as, type r)
+        : arguments(std::move(as)), result(std::move(r))
+{ }
+
 void function_ty::format(std::ostream& o) const
 {
     o << '(' << Separated{arguments} << ") -> " << result;
