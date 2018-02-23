@@ -136,6 +136,35 @@ private:
     vector_t buckets_;
     size_t size_;
 
+    Bucket* lookup_(const value_type& key)
+    {
+        size_t hash_code = hash_(key);
+        size_t pos = which_bucket_(hash_code);
+        size_t dist = 0;
+
+        for (;;) {
+            Bucket& bucket = buckets_[pos];
+            if (!bucket.ptr_ || bucket.tombstone_) {
+                return nullptr;
+            }
+
+            if (dist > probe_distance_(pos, which_bucket_(bucket.hash_code_))) {
+                return nullptr;
+            }
+
+            if (hash_code == bucket.hash_code_) {
+                if (auto locked = bucket.ptr_.lock()) {
+                    if (equal_(*locked, key)) {
+                        return &bucket;
+                    }
+                }
+            }
+
+            pos = (pos + 1) % buckets_.size();
+            ++dist;
+        }
+    }
+
     // Based on https://www.sebastiansylvan.com/post/robin-hood-hashing-should-be-your-default-hash-table-implementation/
     void insert_(size_t hash_code, ptr_type ptr)
     {
