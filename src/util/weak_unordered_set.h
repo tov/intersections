@@ -32,7 +32,7 @@ public:
     using allocator_type = Allocator;
 
 private:
-    // We're going to steal a bit from the hash codes to store a tombstone.
+    // We're going to steal a bit from the hash codes to store a used bit..
     // So the number of hash bits is one less than the number of bits in size_t.
     static constexpr size_t number_of_hash_bits_ =
         sizeof(size_t) * CHAR_BIT - 1;
@@ -56,32 +56,38 @@ private:
         Hash hash_;
     };
 
-    // We store the weak pointers in buckets along with a tombstone bit and the
-    // hash code for each bucket. tombstone_ and hash_code_ are only valid if
-    // ptr_ is non-null.
+    // We store the weak pointers in buckets along with a used bit and the
+    // hash code for each bucket. hash_code_ is only valid if ptr_ is non-null.
     class Bucket
     {
-        weak_ptr_type ptr_;
-        size_t        tombstone_ : 1,
-                      hash_code_ : number_of_hash_bits_;
-
-        friend class rh_weak_unordered_set;
-
     public:
+        Bucket()
+                : used_(0), hash_code_(0)
+        { }
+
         bool occupied() const
         {
-            return ptr_ && !tombstone_ && ptr_.lock();
+            return used_ && !ptr_.expired();
         }
 
         ptr_type ptr() const
         {
-            return {ptr_};
+            return ptr_type{ptr_};
         }
+
+    private:
+        weak_ptr_type ptr_;
+        size_t        used_ : 1,
+                      hash_code_ : number_of_hash_bits_;
+
+
+        friend class rh_weak_unordered_set;
     };
 
 public:
     using bucket_allocator_type =
-        typename std::allocator_traits<allocator_type>::template rebind_alloc<Bucket>;
+        typename std::allocator_traits<allocator_type>
+                     ::template rebind_alloc<Bucket>;
 
 private:
     using vector_t = fixed_vector<Bucket, bucket_allocator_type>;
@@ -115,6 +121,21 @@ public:
         return size_;
     }
 
+    void insert(const ptr_type& ptr)
+    {
+        insert_(ptr);
+    }
+
+    void insert(ptr_type&& ptr)
+    {
+        insert_(std::move(ptr));
+    }
+
+    bool member(const value_type& key) const
+    {
+        return lookup_(key) != nullptr;
+    }
+
     class iterator;
     using const_iterator = iterator;
 
@@ -128,6 +149,16 @@ public:
         return {buckets_.end(), buckets_.end()};
     }
 
+    const_iterator cbegin() const
+    {
+        return begin();
+    }
+
+    const_iterator cend() const
+    {
+        return end();
+    }
+
 private:
     real_hasher hash_;
     key_equal equal_;
@@ -135,6 +166,30 @@ private:
 
     vector_t buckets_;
     size_t size_;
+
+    const Bucket* lookup_(const value_type& key) const
+    {
+        size_t hash_code = hash_(key);
+        size_t pos = which_bucket_(hash_code);
+        size_t dist = 0;
+
+        for (;;) {
+            const Bucket& bucket = buckets_[pos];
+            if (!bucket.used_)
+                return nullptr;
+
+            if (dist > probe_distance_(pos, which_bucket_(bucket.hash_code_)))
+                return nullptr;
+
+            if (hash_code == bucket.hash_code_)
+                if (auto locked = bucket.ptr_.lock())
+                    if (equal_(*locked, key))
+                        return &bucket;
+
+            pos = next_bucket_(pos);
+            ++dist;
+        }
+    }
 
     Bucket* lookup_(const value_type& key)
     {
@@ -144,43 +199,42 @@ private:
 
         for (;;) {
             Bucket& bucket = buckets_[pos];
-            if (!bucket.ptr_ || bucket.tombstone_) {
+            if (!bucket.used_)
                 return nullptr;
-            }
 
-            if (dist > probe_distance_(pos, which_bucket_(bucket.hash_code_))) {
+            if (dist > probe_distance_(pos, which_bucket_(bucket.hash_code_)))
                 return nullptr;
-            }
 
-            if (hash_code == bucket.hash_code_) {
-                if (auto locked = bucket.ptr_.lock()) {
-                    if (equal_(*locked, key)) {
+            if (hash_code == bucket.hash_code_)
+                if (auto locked = bucket.ptr_.lock())
+                    if (equal_(*locked, key))
                         return &bucket;
-                    }
-                }
-            }
 
-            pos = (pos + 1) % buckets_.size();
+            pos = next_bucket_(pos);
             ++dist;
         }
     }
 
     // Based on https://www.sebastiansylvan.com/post/robin-hood-hashing-should-be-your-default-hash-table-implementation/
-    void insert_(size_t hash_code, ptr_type ptr)
+    bool insert_(ptr_type ptr)
     {
+        size_t hash_code = hash_(*ptr);
         size_t pos = which_bucket_(hash_code);
         size_t dist = 0;
+
+        bool original_pointer = true;
+        bool saved_original_pointer = false;
 
         for (;;) {
             Bucket& bucket = buckets_[pos];
 
             // If the bucket is unoccupied, use it:
-            if (!bucket.ptr_ || bucket.tombstone_) {
+            if (!bucket.used_) {
                 bucket.ptr_ = ptr;
                 bucket.hash_code_ = hash_code;
-                bucket.tombstone_ = 0;
+                bucket.used_ = 1;
                 ++size_;
-                return;
+                return original_pointer || saved_original_pointer;
             }
 
             // Check if the pointer is expired. If it is, use this slot.
@@ -188,13 +242,13 @@ private:
             if (!locked) {
                 bucket.ptr_ = ptr;
                 bucket.hash_code_ = hash_code;
-                return;
+                return original_pointer || saved_original_pointer;
             }
 
             // If not expired, but matches the value to insert, replace.
             if (hash_code == bucket.hash_code_ && equal_(*locked, *ptr)) {
                 bucket.ptr_ = ptr;
-                return;
+                return saved_original_pointer;
             }
 
             // Otherwise, we check the probe distance.
@@ -202,15 +256,23 @@ private:
                 probe_distance_(pos, which_bucket_(bucket.hash_code_));
             if (dist > existing_distance) {
                 bucket.ptr_ = std::exchange(ptr, std::move(locked));
+                size_t tmp = bucket.hash_code_;
+                bucket.hash_code_ = hash_code;
+                hash_code = tmp;
                 dist = existing_distance;
             }
 
-            pos = (pos + 1) % buckets_.size();
+            pos = next_bucket_(pos);
             ++dist;
         }
     }
 
-    size_t probe_distance_(size_t actual, size_t preferred)
+    size_t next_bucket_(size_t pos) const
+    {
+        return (pos + 1) % buckets_.size();
+    }
+
+    size_t probe_distance_(size_t actual, size_t preferred) const
     {
         if (actual >= preferred)
             return actual - preferred;
@@ -218,7 +280,7 @@ private:
             return actual + buckets_.size() - preferred;
     }
 
-    size_t which_bucket_(size_t hash_code)
+    size_t which_bucket_(size_t hash_code) const
     {
         return hash_code % buckets_.size();
     }

@@ -2,7 +2,6 @@
 
 #include <iostream>
 #include <memory>
-#include <variant>
 #include <vector>
 
 namespace intersections {
