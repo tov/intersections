@@ -13,23 +13,162 @@ namespace intersections::util {
 static size_t const default_bucket_count = 8;
 static double const grow_at_ratio = 0.75;
 
-namespace detail {
+template <class T>
+struct weak_traits
+{
+    using strong_type = typename T::strong_type;
+    using key_type = typename T::key_type;
 
-} // end namespace detail
+    static key_type* get_key(const strong_type& strong)
+    {
+        return strong_type::key(strong);
+    }
+};
+
+template <class T>
+struct weak_traits<std::weak_ptr<const T>>
+{
+    using strong_type = std::shared_ptr<const T>;
+    using key_type = const T;
+
+    static key_type* get_key(const strong_type& strong)
+    {
+        return strong? strong.get() : nullptr;
+    }
+};
+
+template <class Key, class Value,
+          class KeyWeakPtr = std::weak_ptr<const Key>,
+          class ValueWeakPtr = std::weak_ptr<Value>,
+          class KeyPtr = typename weak_traits<KeyWeakPtr>::strong_type,
+          class ValuePtr = typename weak_traits<ValueWeakPtr>::strong_type>
+struct weak_pair
+{
+    using key_type = Key;
+    using value_type = Value;
+    using key_pointer = KeyPtr;
+    using value_pointer = ValuePtr;
+    using key_weak_pointer = KeyWeakPtr;
+    using value_weak_pointer = ValueWeakPtr;
+    using strong_type = std::pair<key_pointer, value_pointer>;
+
+    key_weak_pointer first;
+    value_weak_pointer second;
+
+    weak_pair(const strong_type& strong)
+            : first(strong.first), second(strong.second)
+    { }
+
+    bool expired() const
+    {
+        return first.expired() || second.expired();
+    }
+
+    strong_type lock() const
+    {
+        if (auto key_ptr = first.lock())
+            if (auto value_ptr = second.lock())
+                return {key_ptr, value_ptr};
+
+        return {nullptr, nullptr};
+    }
+
+    static const key_type* key(const strong_type& strong)
+    {
+        if (strong.first)
+            return strong.first.get();
+        else
+            return nullptr;
+    }
+};
+
+template <class Key, class Value,
+          class KeyPtr = std::shared_ptr<const Key>,
+          class KeyWeakPtr = typename KeyPtr::weak_type>
+struct weak_key_pair
+{
+    using key_type = Key;
+    using value_type = Value;
+    using key_pointer = KeyPtr;
+    using key_weak_pointer = KeyWeakPtr;
+    using strong_type = std::pair<key_pointer, value_type&>;
+
+    key_weak_pointer first;
+    value_type second;
+
+    weak_key_pair(const strong_type& strong)
+            : first(strong.first), second(strong.second)
+    { }
+
+    bool expired() const
+    {
+        return first.expired();
+    }
+
+    strong_type lock() const
+    {
+        return {first.lock(), second};
+    }
+
+    static const key_type* key(const strong_type& strong)
+    {
+        if (strong.first)
+            return strong.first.get();
+        else
+            return nullptr;
+    }
+};
+
+template <class Key, class Value,
+          class ValuePtr = std::shared_ptr<Value>,
+          class ValueWeakPtr = typename ValuePtr::weak_type>
+struct weak_value_pair
+{
+    using key_type = Key;
+    using value_type = Value;
+    using value_pointer = ValuePtr;
+    using value_weak_pointer = ValueWeakPtr;
+    using strong_type = std::pair<const key_type&, value_pointer>;
+
+    key_type first;
+    value_weak_pointer second;
+
+    weak_value_pair(const strong_type& strong)
+            : first(strong.first), second(strong.second)
+    { }
+
+    bool expired() const
+    {
+        return second.expired();
+    }
+
+    strong_type lock() const
+    {
+        return {first, second.lock()};
+    }
+
+    static const key_type* key(const strong_type& strong)
+    {
+        if (strong.second)
+            return &strong.first;
+        else
+            return nullptr;
+    }
+};
 
 /// A weak Robin Hood hash table storing std::weak_ptrs.
 template <
-    class Key,
-    class Hash = std::hash<Key>,
-    class KeyEqual = std::equal_to<Key>,
-    class Allocator = std::allocator<Key>
+    class T,
+    class Hash = std::hash<typename weak_traits<T>::key_type>,
+    class KeyEqual = std::equal_to<typename weak_traits<T>::key_type>,
+    class Allocator = std::allocator<T>
 >
-class rh_weak_unordered_set
+class rh_weak_hash_table
 {
 public:
-    using value_type = Key;
-    using ptr_type = std::shared_ptr<const value_type>;
-    using weak_ptr_type = std::weak_ptr<const value_type>;
+    using weak_value_type = T;
+    using strong_value_type = typename weak_traits<T>::strong_type;
+    using key_type = typename weak_traits<T>::key_type;
     using hasher = Hash;
     using key_equal = KeyEqual;
     using allocator_type = Allocator;
@@ -50,9 +189,9 @@ private:
     public:
         explicit real_hasher(const Hash& hash) : hash_(hash) { }
 
-        size_t operator()(const value_type& value) const
+        size_t operator()(const key_type& key) const
         {
-            return hash_(value) & hash_code_mask_;
+            return hash_(key) & hash_code_mask_;
         }
 
     private:
@@ -70,21 +209,20 @@ private:
 
         bool occupied() const
         {
-            return used_ && !ptr_.expired();
+            return used_ && !value_.expired();
         }
 
-        ptr_type ptr() const
+        strong_value_type lock() const
         {
-            return ptr_type{ptr_};
+            return value_.lock();
         }
 
     private:
-        weak_ptr_type ptr_;
-        size_t        used_ : 1,
-                      hash_code_ : number_of_hash_bits_;
+        weak_value_type value_;
+        size_t          used_ : 1,
+                        hash_code_ : number_of_hash_bits_;
 
-
-        friend class rh_weak_unordered_set;
+        friend class rh_weak_hash_table;
     };
 
 public:
@@ -97,11 +235,11 @@ private:
 
 public:
 
-    rh_weak_unordered_set()
-            : rh_weak_unordered_set(default_bucket_count)
+    rh_weak_hash_table()
+            : rh_weak_hash_table(default_bucket_count)
     { }
 
-    explicit rh_weak_unordered_set(
+    explicit rh_weak_hash_table(
         size_t capacity,
         const hasher& hash = hasher(),
         const key_equal& equal = key_equal(),
@@ -324,8 +462,13 @@ private:
     }
 };
 
-template <class Key, class Hash, class KeyEqual, class Allocator>
-class rh_weak_unordered_set<Key, Hash, KeyEqual, Allocator>::iterator
+template <
+    class Key,
+    class Hash,
+    class KeyEqual,
+    class Allocator
+>
+class rh_weak_hash_table<Key, Hash, KeyEqual, Allocator>::iterator
         : public std::iterator<std::forward_iterator_tag, ptr_type>
 {
 public:
