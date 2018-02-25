@@ -39,8 +39,10 @@ TEST_CASE("growing")
     }
 
     CHECK( 1000 == set.size() );
+    CHECK( set.member(999) );
     holder.pop_back();
     CHECK( 1000 == set.size() );
+    CHECK( !set.member(999) );
 
     size_t count = 0;
     for (const auto& ptr : set) ++count;

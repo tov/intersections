@@ -105,10 +105,10 @@ public:
         size_t capacity,
         const hasher& hash = hasher(),
         const key_equal& equal = key_equal(),
-        const bucket_allocator_type& bucket_allocator = bucket_allocator_type())
+        const allocator_type& allocator = allocator_type())
             : hash_(real_hasher(hash))
             , equal_(equal)
-            , bucket_allocator_(bucket_allocator)
+            , bucket_allocator_(allocator)
             , buckets_(capacity, bucket_allocator_)
             , size_(0)
     { }
