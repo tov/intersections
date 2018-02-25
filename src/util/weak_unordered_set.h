@@ -2,6 +2,7 @@
 
 #include "fixed_vector.h"
 
+#include <cassert>
 #include <climits>
 #include <iterator>
 #include <limits>
@@ -10,11 +11,13 @@
 namespace intersections::util {
 
 static size_t const default_bucket_count = 8;
+static double const grow_at_ratio = 0.75;
 
 namespace detail {
 
 } // end namespace detail
 
+/// A weak Robin Hood hash table storing std::weak_ptrs.
 template <
     class Key,
     class Hash = std::hash<Key>,
@@ -102,7 +105,6 @@ public:
         size_t capacity,
         const hasher& hash = hasher(),
         const key_equal& equal = key_equal(),
-        const allocator_type& allocator = allocator_type(),
         const bucket_allocator_type& bucket_allocator = bucket_allocator_type())
             : hash_(real_hasher(hash))
             , equal_(equal)
@@ -123,12 +125,15 @@ public:
 
     void insert(const ptr_type& ptr)
     {
-        insert_(ptr);
+        insert_(hash_(*ptr), ptr);
+        maybe_grow_();
     }
 
     void insert(ptr_type&& ptr)
     {
-        insert_(std::move(ptr));
+        size_t hash_code = hash_(*ptr);
+        insert_(hash_code, std::move(ptr));
+        maybe_grow_();
     }
 
     bool member(const value_type& key) const
@@ -166,6 +171,33 @@ private:
 
     vector_t buckets_;
     size_t size_;
+
+    void maybe_grow_()
+    {
+        auto cap = buckets_.size();
+        if (double(size_)/double(cap) > grow_at_ratio) {
+            resize_(2 * cap);
+        }
+    }
+
+    void resize_(size_t new_capacity)
+    {
+        assert(new_capacity > size_);
+
+        using std::swap;
+        vector_t old_buckets(new_capacity);
+        swap(old_buckets, buckets_);
+
+        size_ = 0;
+
+        for (const Bucket& bucket : old_buckets) {
+            if (bucket.used_) {
+                if (auto ptr = bucket.ptr_.lock()) {
+                    insert_(bucket.hash_code_, ptr);
+                }
+            }
+        }
+    }
 
     const Bucket* lookup_(const value_type& key) const
     {
@@ -216,9 +248,8 @@ private:
     }
 
     // Based on https://www.sebastiansylvan.com/post/robin-hood-hashing-should-be-your-default-hash-table-implementation/
-    bool insert_(ptr_type ptr)
+    bool insert_(size_t hash_code, ptr_type ptr)
     {
-        size_t hash_code = hash_(*ptr);
         size_t pos = which_bucket_(hash_code);
         size_t dist = 0;
 
@@ -255,6 +286,8 @@ private:
             size_t existing_distance =
                 probe_distance_(pos, which_bucket_(bucket.hash_code_));
             if (dist > existing_distance) {
+                saved_original_pointer = true;
+                original_pointer = false;
                 bucket.ptr_ = std::exchange(ptr, std::move(locked));
                 size_t tmp = bucket.hash_code_;
                 bucket.hash_code_ = hash_code;
