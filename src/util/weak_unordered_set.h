@@ -20,6 +20,8 @@ struct weak_traits
     using strong_type = typename T::strong_type;
     /// view_type does not.
     using view_type = typename T::view_type;
+    /// as viewed from a const_iterator.
+    using const_view_type = typename T::const_view_type;
     /// the type of keys
     using key_type = typename T::key_type;
     /// gets a pointer to a key from a view_type or a strong_type.
@@ -34,6 +36,7 @@ struct weak_traits<std::weak_ptr<T>>
 {
     using strong_type = std::shared_ptr<T>;
     using view_type = strong_type;
+    using const_view_type = view_type;
     using key_type = T;
 
     static const view_type& view(const strong_type& strong)
@@ -45,7 +48,7 @@ struct weak_traits<std::weak_ptr<T>>
     // same.
     static key_type* key(const view_type& view)
     {
-        return view? view.get() : nullptr;
+        return view.get();
     }
 
     static strong_type move(view_type& view)
@@ -59,6 +62,7 @@ struct weak_traits<std::weak_ptr<const T>>
 {
     using strong_type = std::shared_ptr<const T>;
     using view_type = strong_type;
+    using const_view_type = view_type;
     using key_type = const T;
 
     static const view_type& view(const strong_type& strong)
@@ -92,6 +96,7 @@ struct weak_pair
     using value_weak_pointer = ValueWeakPtr;
     using strong_type = std::pair<key_pointer, value_pointer>;
     using view_type = strong_type;
+    using const_view_type = view_type;
 
     key_weak_pointer first;
     value_weak_pointer second;
@@ -136,8 +141,9 @@ struct weak_key_pair
     using value_type = Value;
     using key_pointer = typename weak_traits<KeyWeakPtr>::strong_type;
     using key_weak_pointer = KeyWeakPtr;
-    using view_type = std::pair<key_pointer, value_type&>;
     using strong_type = std::pair<key_pointer, value_type>;
+    using view_type = std::pair<key_pointer, value_type&>;
+    using const_view_type = std::pair<key_pointer, const value_type&>;
 
     key_weak_pointer first;
     value_type second;
@@ -151,7 +157,12 @@ struct weak_key_pair
         return first.expired();
     }
 
-    view_type lock() const
+    view_type lock()
+    {
+        return {first.lock(), second};
+    }
+
+    const_view_type lock() const
     {
         return {first.lock(), second};
     }
@@ -183,8 +194,9 @@ struct weak_value_pair
     using value_type = Value;
     using value_pointer = typename weak_traits<ValueWeakPtr>::strong_type;
     using value_weak_pointer = ValueWeakPtr;
-    using view_type = std::pair<const key_type&, value_pointer>;
     using strong_type = std::pair<key_type, value_pointer>;
+    using view_type = std::pair<const key_type&, value_pointer>;
+    using const_view_type = view_type;
 
     key_type first;
     value_weak_pointer second;
@@ -233,14 +245,15 @@ template <
 class rh_weak_hash_table
 {
 public:
-    using weak_value_type = T;
-    using weak_trait = weak_traits<weak_value_type>;
-    using view_value_type = typename weak_trait::view_type;
-    using strong_value_type = typename weak_trait::strong_type;
-    using key_type = typename weak_trait::key_type;
-    using hasher = Hash;
-    using key_equal = KeyEqual;
-    using allocator_type = Allocator;
+    using weak_value_type       = T;
+    using weak_trait            = weak_traits<weak_value_type>;
+    using view_value_type       = typename weak_trait::view_type;
+    using const_view_value_type = typename weak_trait::const_view_type;
+    using strong_value_type     = typename weak_trait::strong_type;
+    using key_type              = typename weak_trait::key_type;
+    using hasher                = Hash;
+    using key_equal             = KeyEqual;
+    using allocator_type        = Allocator;
 
 private:
     // We're going to steal a bit from the hash codes to store a used bit..
@@ -352,7 +365,17 @@ public:
     }
 
     class iterator;
-    using const_iterator = iterator;
+    class const_iterator;
+
+    iterator begin()
+    {
+        return {buckets_.begin(), buckets_.end()};
+    }
+
+    iterator end()
+    {
+        return {buckets_.end(), buckets_.end()};
+    }
 
     iterator begin() const
     {
@@ -523,7 +546,7 @@ class rh_weak_hash_table<T, Hash, KeyEqual, Allocator>::iterator
         : public std::iterator<std::forward_iterator_tag, T>
 {
 public:
-    using base_t = typename vector_t::const_iterator;
+    using base_t = typename vector_t::iterator;
 
     iterator(base_t start, base_t limit)
             : base_(start), limit_(limit)
@@ -531,7 +554,7 @@ public:
         find_next_();
     }
 
-    strong_value_type operator*() const
+    view_value_type operator*() const
     {
         return base_->value_.lock();
     }
@@ -550,12 +573,75 @@ public:
         return old;
     }
 
-    bool operator==(const iterator& other)
+    bool operator==(iterator other)
     {
         return base_ == other.base_;
     }
 
-    bool operator!=(const iterator& other)
+    bool operator!=(iterator other)
+    {
+        return base_ != other.base_;
+    }
+
+private:
+    // Invariant: if base_ != limit_ then base_->occupied();
+    base_t base_;
+    base_t limit_;
+
+    void find_next_()
+    {
+        while (base_ != limit_ && !base_->occupied())
+            ++base_;
+    }
+};
+
+template <
+    class T,
+    class Hash,
+    class KeyEqual,
+    class Allocator
+>
+class rh_weak_hash_table<T, Hash, KeyEqual, Allocator>::const_iterator
+        : public std::iterator<std::forward_iterator_tag, const T>
+{
+public:
+    using base_t = typename vector_t::const_iterator;
+
+    const_iterator(base_t start, base_t limit)
+            : base_(start), limit_(limit)
+    {
+        find_next_();
+    }
+
+    const_iterator(iterator other)
+            : base_(other.base_), limit_(other.limit_)
+    { }
+
+    const_view_value_type operator*() const
+    {
+        return base_->value_.lock();
+    }
+
+    const_iterator& operator++()
+    {
+        ++base_;
+        find_next_();
+        return *this;
+    }
+
+    const_iterator operator++(int)
+    {
+        auto old = *this;
+        ++*this;
+        return old;
+    }
+
+    bool operator==(const_iterator other)
+    {
+        return base_ == other.base_;
+    }
+
+    bool operator!=(const_iterator other)
     {
         return base_ != other.base_;
     }
@@ -578,14 +664,59 @@ template <
     class KeyEqual = std::equal_to<Key>,
     class Allocator = std::allocator<Key>
 >
-using weak_unordered_set =
-    rh_weak_hash_table<std::weak_ptr<const Key>, Hash, KeyEqual, Allocator>;
+class weak_unordered_set :
+    public rh_weak_hash_table<std::weak_ptr<const Key>,
+                              Hash, KeyEqual, Allocator>
+{
+    using BaseClass = rh_weak_hash_table<std::weak_ptr<const Key>,
+                                         Hash, KeyEqual, Allocator>;
+public:
+    using BaseClass::rh_weak_hash_table;
+};
 
-// template <class Key, class Value,
-//           class Hash = std::hash<Key>,
-//           class KeyEqual = std::equal_to<Key>,
-//           class Allocator = std::allocator<weak_pair<Key, Value>>>
-// using weak_unordered_map =
-//     rh_weak_hash_table<weak_pair<Key, Value>, Hash, KeyEqual, Allocator>;
+template <class Key, class Value,
+          class Hash = std::hash<Key>,
+          class KeyEqual = std::equal_to<Key>,
+          class Allocator = std::allocator<weak_pair<Key, Value>>>
+class weak_unordered_map
+    : public rh_weak_hash_table<weak_pair<Key, Value>,
+                                Hash, KeyEqual, Allocator>
+{
+    using BaseClass = rh_weak_hash_table<weak_pair<Key, Value>,
+                                                   Hash, KeyEqual, Allocator>;
+public:
+    using BaseClass::rh_weak_hash_table;
+};
+
+template <class Key, class Value,
+          class Hash = std::hash<Key>,
+          class KeyEqual = std::equal_to<Key>,
+          class Allocator = std::allocator<weak_key_pair<Key, Value>>>
+class weak_key_unordered_map
+    : public rh_weak_hash_table<weak_key_pair<Key, Value>,
+                                Hash, KeyEqual, Allocator>
+{
+    using BaseClass = rh_weak_hash_table<weak_key_pair<Key, Value>,
+                                                       Hash, KeyEqual,
+                                                       Allocator>;
+public:
+    using BaseClass::rh_weak_hash_table;
+};
+
+template <class Key, class Value,
+          class Hash = std::hash<Key>,
+          class KeyEqual = std::equal_to<Key>,
+          class Allocator = std::allocator<weak_value_pair<Key, Value>>>
+class weak_value_unordered_map
+    : public rh_weak_hash_table<weak_value_pair<Key, Value>,
+                                Hash, KeyEqual, Allocator>
+{
+    using BaseClass = rh_weak_hash_table<weak_value_pair<Key, Value>,
+                                                         Hash, KeyEqual,
+                                                         Allocator>;
+public:
+    using BaseClass::rh_weak_hash_table;
+};
+
 
 } // end namespace intersections::util
