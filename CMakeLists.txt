@@ -13,7 +13,7 @@ endmacro (add_executable17)
 add_executable17(intersections_test
         test/type_test.cpp
         test/catch_main.cpp
-        # test/wus_test.cpp
+        test/wus_test.cpp
         test/raw_vector_test.cpp
         src/util/weak_unordered_set.h
         src/util/raw_vector.h
