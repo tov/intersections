@@ -7,7 +7,7 @@
 namespace intersections::util {
 
 template<class T, class Allocator = std::allocator<T>>
-class fixed_vector
+class raw_vector
 {
 public:
     using value_type = T;
@@ -17,39 +17,33 @@ public:
     using reference = value_type&;
     using const_reference = value_type const&;
 
-    fixed_vector()
-            : fixed_vector(0)
+    raw_vector()
+            : raw_vector(0)
     {}
 
-    explicit fixed_vector(size_t size,
+    explicit raw_vector(size_t size,
                           const allocator_type& allocator = allocator_type())
             : allocator_(allocator), size_(size),
               data_(allocate_(allocator_, size_)) {}
 
-    explicit fixed_vector(size_t size,
-                          const_reference element,
-                          const allocator_type& allocator = allocator_type())
-            : allocator_(allocator), size_(size),
-              data_(allocate_(allocator_, size_, element)) {}
-
-    ~fixed_vector()
+    ~raw_vector()
     {
         deallocate_();
     }
 
-    fixed_vector(fixed_vector&& other) : fixed_vector()
+    raw_vector(raw_vector&& other) : raw_vector()
     {
         swap(other);
     }
 
-    fixed_vector& operator=(fixed_vector&& other)
+    raw_vector& operator=(raw_vector&& other)
     {
         swap(other);
         other.clear();
     }
 
-    fixed_vector(const fixed_vector&) = delete;
-    fixed_vector& operator=(const fixed_vector&) = delete;
+    raw_vector(const raw_vector&) = delete;
+    raw_vector& operator=(const raw_vector&) = delete;
 
     bool empty() const
     {
@@ -61,7 +55,7 @@ public:
         return size_;
     }
 
-    void swap(fixed_vector& other)
+    void swap(raw_vector& other)
     {
         using std::swap;
         swap(allocator_, other.allocator_);
@@ -89,13 +83,13 @@ public:
 
     const_reference at(size_t index) const
     {
-        if (index >= size_) throw std::range_error("fixed_vector");
+        if (index >= size_) throw std::range_error("raw_vector");
         return data_[index];
     }
 
     reference at(size_t index)
     {
-        if (index >= size_) throw std::range_error("fixed_vector");
+        if (index >= size_) throw std::range_error("raw_vector");
         return data_[index];
     }
 
@@ -135,20 +129,13 @@ private:
 
     using allocator_trait = std::allocator_traits<allocator_type>;
 
-    template<class... Args>
-    static T* allocate_(allocator_type& allocator,
-                        size_t size,
-                        Args... args)
+    static T* allocate_(allocator_type& allocator, size_t size)
     {
-        auto new_data = allocator_trait::allocate(allocator, size);
-        for (size_t i = 0; i < size; ++i)
-            new(&new_data[i]) T(std::forward<Args>(args)...);
-        return new_data;
+        return allocator_trait::allocate(allocator, size);
     }
 
     void deallocate_()
     {
-        for (size_t i = 0; i < size_; ++i) data_[i].~T();
         allocator_trait::deallocate(allocator_, data_, size_);
     }
 };
